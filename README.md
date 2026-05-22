@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Bitext Customer Service Data Analyst Agent (Assignment 3)
 
 LangGraph ReAct agent over the Bitext customer-support dataset with preprocessing, router, tools, memory, and FastMCP.
@@ -104,3 +105,7 @@ main.py       CLI
 | Agent | `AGENT_MODEL` | Tool planning and summarization |
 
 Adjust model IDs to those enabled in your Nebius Token Factory account.
+=======
+# bitext-customer-analyst-AI-agent
+AI agent that knows how to respponse obver bitext-customer data
+>>>>>>> 7544d8b52d7bd49502e027384838d312a990c017
