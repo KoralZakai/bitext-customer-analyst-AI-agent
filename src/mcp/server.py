@@ -10,9 +10,11 @@ from src.tools.analytics import (
     distribution_by_category,
     distribution_by_intent,
     filter_records,
+    get_conversation_example,
     list_categories,
     list_intents,
     search_instructions,
+    suggest_next_query,
 )
 
 mcp = FastMCP("bitext-analyst")
@@ -20,27 +22,13 @@ mcp = FastMCP("bitext-analyst")
 
 @mcp.tool
 def list_categories_tool() -> str:
-    """
-    List all customer-support categories in the dataset.
-
-    Name: list_categories_tool
-    Input: None
-    Output: str — JSON from list_categories tool
-    Purpose: MCP wrapper for external clients (Cursor, etc.).
-    """
+    """List all customer-support categories in the dataset."""
     return list_categories.invoke({})
 
 
 @mcp.tool
 def list_intents_tool(category: str | None = None) -> str:
-    """
-    List intents, optionally filtered by category.
-
-    Name: list_intents_tool
-    Input: category — optional category filter
-    Output: str — JSON from list_intents tool
-    Purpose: Expose intent taxonomy over MCP.
-    """
+    """List intents, optionally filtered by category."""
     return list_intents.invoke({"category": category})
 
 
@@ -50,40 +38,19 @@ def count_rows_tool(
     intent: str | None = None,
     keyword: str | None = None,
 ) -> str:
-    """
-    Count rows with optional filters (real data only).
-
-    Name: count_rows_tool
-    Input: category, intent, keyword — optional filters
-    Output: str — JSON count result
-    Purpose: MCP access to row counting without running the full CLI agent.
-    """
+    """Count rows with optional filters (real data only)."""
     return count_rows.invoke({"category": category, "intent": intent, "keyword": keyword})
 
 
 @mcp.tool
 def distribution_by_category_tool() -> str:
-    """
-    Row counts per category.
-
-    Name: distribution_by_category_tool
-    Input: None
-    Output: str — JSON category distribution
-    Purpose: MCP wrapper for category distribution analytics.
-    """
+    """Row counts per category."""
     return distribution_by_category.invoke({})
 
 
 @mcp.tool
 def distribution_by_intent_tool(category: str | None = None) -> str:
-    """
-    Row counts per intent.
-
-    Name: distribution_by_intent_tool
-    Input: category — optional scope
-    Output: str — JSON intent distribution
-    Purpose: MCP wrapper for intent distribution analytics.
-    """
+    """Row counts per intent."""
     return distribution_by_intent.invoke({"category": category})
 
 
@@ -94,14 +61,7 @@ def filter_records_tool(
     keyword: str | None = None,
     limit: int = 5,
 ) -> str:
-    """
-    Sample records matching filters.
-
-    Name: filter_records_tool
-    Input: category, intent, keyword, limit — filter and sample size
-    Output: str — JSON samples
-    Purpose: MCP access to example rows from the dataset.
-    """
+    """Sample records matching filters."""
     return filter_records.invoke(
         {"category": category, "intent": intent, "keyword": keyword, "limit": limit}
     )
@@ -109,39 +69,39 @@ def filter_records_tool(
 
 @mcp.tool
 def search_instructions_tool(keyword: str, limit: int = 10) -> str:
-    """
-    Search instructions including augmented paraphrases.
-
-    Name: search_instructions_tool
-    Input: keyword — search text; limit — max hits
-    Output: str — JSON search results
-    Purpose: MCP text search over instructions.
-    """
+    """Search instructions including augmented paraphrases."""
     return search_instructions.invoke({"keyword": keyword, "limit": limit})
 
 
 @mcp.tool
 def dataset_summary_tool() -> str:
-    """
-    Dataset overview and quality notes.
-
-    Name: dataset_summary_tool
-    Input: None
-    Output: str — JSON dataset summary
-    Purpose: MCP high-level dataset orientation for clients.
-    """
+    """Dataset overview and quality notes."""
     return dataset_summary.invoke({})
 
 
+@mcp.tool
+def get_conversation_example_tool(intent: str, limit: int = 2) -> str:
+    """
+    Return synthetic multi-turn conversations for an intent.
+    Requires augment_conversations.py to have been run first.
+    """
+    return get_conversation_example.invoke({"intent": intent, "limit": limit})
+
+
+@mcp.tool
+def suggest_next_query_tool(discussed_topics: str) -> str:
+    """
+    Generate 1-3 follow-up query suggestions based on discussed topics.
+    Present suggestions to the user and wait for confirmation before executing.
+    """
+    return suggest_next_query.invoke({"discussed_topics": discussed_topics})
+
+
 def main() -> None:
-    """
-    Name: main
-    Input: None
-    Output: None (runs MCP server process)
-    Purpose: Entry point for python -m src.mcp.server.
-    """
+    """Entry point for python -m src.mcp.server."""
     mcp.run()
 
 
 if __name__ == "__main__":
     main()
+

@@ -7,18 +7,13 @@ from typing import Any
 
 import pandas as pd
 from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 
-from src.data.loader import load_metadata, load_real_dataframe, load_search_dataframe
+from src.data.loader import load_conversations, load_metadata, load_real_dataframe, load_search_dataframe
 from src.data.preprocess import apply_keyword_to_category, apply_keyword_to_intent, load_aliases
 
 
 def _real_df() -> pd.DataFrame:
-    """
-    Name: _real_df
-    Input: None
-    Output: pd.DataFrame — non-synthetic rows only
-    Purpose: Internal helper so count tools never include augmented paraphrases.
-    """
     return load_real_dataframe()
 
 
@@ -27,12 +22,6 @@ def _resolve_filters(
     intent: str | None = None,
     keyword: str | None = None,
 ) -> tuple[str | None, str | None, str | None]:
-    """
-    Name: _resolve_filters
-    Input: category, intent, keyword — optional filter strings from user or agent
-    Output: tuple — normalized (category, intent, keyword) after alias resolution
-    Purpose: Map natural language to canonical enums before pandas filtering.
-    """
     aliases = load_aliases()
     cat = category.strip().upper() if category else None
     it = intent.strip().upper() if intent else None
@@ -49,29 +38,117 @@ def _resolve_filters(
     return cat, it, kw
 
 
+# ---------------------------------------------------------------------------
+# Pydantic input schemas
+# ---------------------------------------------------------------------------
+
+class ListIntentsInput(BaseModel):
+    category: str | None = Field(
+        None,
+        description=(
+            "Category name to scope the intent list, e.g. 'REFUND' or 'ACCOUNT'. "
+            "Leave empty to list all 27 intents across the whole dataset."
+        ),
+    )
+
+
+class CountRowsInput(BaseModel):
+    category: str | None = Field(
+        None,
+        description=(
+            "Category to filter by, e.g. 'REFUND', 'ORDER', 'SHIPPING'. "
+            "Leave empty to count across all categories."
+        ),
+    )
+    intent: str | None = Field(
+        None,
+        description=(
+            "Specific intent to filter by, e.g. 'GET_REFUND', 'CANCEL_ORDER', 'TRACK_ORDER'. "
+            "Leave empty to count all intents."
+        ),
+    )
+    keyword: str | None = Field(
+        None,
+        description=(
+            "Free-text keyword to match inside instruction or response text. "
+            "Alias resolution maps natural phrases like 'money back' → GET_REFUND."
+        ),
+    )
+
+
+class DistributionByIntentInput(BaseModel):
+    category: str | None = Field(
+        None,
+        description=(
+            "Limit the distribution to intents within this category, e.g. 'ACCOUNT'. "
+            "Leave empty for a global intent distribution across the whole dataset."
+        ),
+    )
+
+
+class FilterRecordsInput(BaseModel):
+    category: str | None = Field(
+        None,
+        description="Category to filter by, e.g. 'SHIPPING'. Leave empty for all categories.",
+    )
+    intent: str | None = Field(
+        None,
+        description="Intent to filter by, e.g. 'TRACK_ORDER'. Leave empty for all intents.",
+    )
+    keyword: str | None = Field(
+        None,
+        description="Keyword to match in the instruction text (case-insensitive).",
+    )
+    limit: int = Field(
+        5,
+        ge=1,
+        le=20,
+        description="Number of sample records to return (1–20). Defaults to 5.",
+    )
+
+
+class SearchInstructionsInput(BaseModel):
+    keyword: str = Field(
+        ...,
+        description=(
+            "Search term or phrase to look up in customer instructions. "
+            "Alias resolution is applied, e.g. 'money back' finds GET_REFUND examples. "
+            "Includes augmented paraphrases if they were generated."
+        ),
+    )
+    limit: int = Field(
+        10,
+        ge=1,
+        le=25,
+        description="Maximum number of matching instructions to return (1–25). Defaults to 10.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
 @tool
 def list_categories() -> str:
     """
-    List all customer-support categories in the dataset.
+    List all 11 customer-support categories in the Bitext dataset.
 
-    Name: list_categories
-    Input: None
-    Output: str — JSON array of category names
-    Purpose: Expose taxonomy without scanning the full parquet file.
+    Use this when the user asks what categories, topics, or sections exist.
+    Returns a JSON array of category names (e.g. REFUND, ORDER, ACCOUNT).
+    No parameters needed.
     """
     meta = load_metadata()
     return json.dumps(meta.get("categories", []), indent=2)
 
 
-@tool
+@tool(args_schema=ListIntentsInput)
 def list_intents(category: str | None = None) -> str:
     """
-    List intents, optionally filtered by category (e.g. REFUND, ORDER).
+    List intents in the dataset, optionally scoped to one category.
 
-    Name: list_intents
-    Input: category — optional category name (case-insensitive)
-    Output: str — JSON list of intents or per-category intent counts
-    Purpose: Help the agent pick valid intent filters for queries.
+    Use this to discover valid intent names before filtering, or to show the user
+    what intents belong to a specific category. Returns intent names and counts.
+    Examples: list_intents() for all, list_intents(category='REFUND') for REFUND only.
     """
     meta = load_metadata()
     if category:
@@ -81,19 +158,19 @@ def list_intents(category: str | None = None) -> str:
     return json.dumps(meta.get("intents", []), indent=2)
 
 
-@tool
+@tool(args_schema=CountRowsInput)
 def count_rows(
     category: str | None = None,
     intent: str | None = None,
     keyword: str | None = None,
 ) -> str:
     """
-    Count dataset rows with optional category, intent, or keyword filters.
+    Count dataset rows matching optional category, intent, or keyword filters.
 
-    Name: count_rows
-    Input: category, intent, keyword — optional filters (aliases applied)
-    Output: str — JSON with count and resolved filter values
-    Purpose: Answer how many rows match structured or text filters (real data only).
+    Use this to answer 'how many' questions. Alias resolution maps natural language
+    phrases to canonical values (e.g. 'refund requests' → intent=GET_REFUND).
+    Only counts real (non-synthetic) rows. Filters can be combined.
+    Example: count_rows(intent='GET_REFUND') returns the count of refund requests.
     """
     df = _real_df()
     cat, it, kw = _resolve_filters(category, intent, keyword)
@@ -115,26 +192,24 @@ def count_rows(
 @tool
 def distribution_by_category() -> str:
     """
-    Return row counts per category (real data only).
+    Return row counts per category for the entire dataset (real data only).
 
-    Name: distribution_by_category
-    Input: None
-    Output: str — JSON map of category to row count
-    Purpose: Summarize category balance from precomputed metadata.
+    Use this for 'how is the data distributed?' or 'which category has the most rows?'
+    questions. Returns a JSON map of category → count, precomputed from metadata.
+    No parameters needed.
     """
     meta = load_metadata()
     return json.dumps(meta.get("category_counts", {}), indent=2)
 
 
-@tool
+@tool(args_schema=DistributionByIntentInput)
 def distribution_by_intent(category: str | None = None) -> str:
     """
-    Return row counts per intent, optionally within one category.
+    Return row counts per intent, optionally scoped to one category.
 
-    Name: distribution_by_intent
-    Input: category — optional category scope
-    Output: str — JSON map of intent to row count
-    Purpose: Show intent distribution globally or within a category.
+    Use this to understand intent balance or answer distribution questions.
+    With no category: global intent counts across all 27 intents.
+    With category='ACCOUNT': only the intents inside the ACCOUNT category.
     """
     meta = load_metadata()
     if category:
@@ -146,7 +221,7 @@ def distribution_by_intent(category: str | None = None) -> str:
     return json.dumps(meta.get("intent_counts", {}), indent=2)
 
 
-@tool
+@tool(args_schema=FilterRecordsInput)
 def filter_records(
     category: str | None = None,
     intent: str | None = None,
@@ -154,12 +229,12 @@ def filter_records(
     limit: int = 5,
 ) -> str:
     """
-    Return sample records matching filters (instruction, category, intent, response snippet).
+    Return sample records (instruction + response) matching the given filters.
 
-    Name: filter_records
-    Input: category, intent, keyword — filters; limit — max samples (1–20)
-    Output: str — JSON with total matches and sample rows
-    Purpose: Show concrete examples for exploratory analyst questions.
+    Use this when the user wants to see concrete examples: 'show me 3 examples from
+    the SHIPPING category' or 'show examples of people wanting their money back'.
+    Returns the total match count plus up to `limit` sample rows.
+    Alias resolution applies — 'money back' will resolve to GET_REFUND examples.
     """
     df = _real_df()
     cat, it, kw = _resolve_filters(category, intent, keyword)
@@ -185,15 +260,14 @@ def filter_records(
     return json.dumps({"matches": len(df), "samples": out}, indent=2)
 
 
-@tool
+@tool(args_schema=SearchInstructionsInput)
 def search_instructions(keyword: str, limit: int = 10) -> str:
     """
-    Search instructions (includes augmented paraphrases if generated).
+    Search customer instructions by keyword, including augmented paraphrases if available.
 
-    Name: search_instructions
-    Input: keyword — search text; limit — max results (1–25)
-    Output: str — JSON with resolved intent and matching instruction samples
-    Purpose: Find phrasing variants including optional synthetic paraphrases.
+    Use this for open-ended search or when the user wants to find phrasing variants.
+    Alias resolution maps e.g. 'cancel' to CANCEL_ORDER instructions automatically.
+    Prefer filter_records for category/intent filtering; use this for free-text search.
     """
     df = load_search_dataframe()
     kw = keyword.strip()
@@ -221,12 +295,12 @@ def search_instructions(keyword: str, limit: int = 10) -> str:
 @tool
 def dataset_summary() -> str:
     """
-    High-level dataset stats and known quality limitations.
+    Return a high-level overview of the Bitext dataset including quality limitations.
 
-    Name: dataset_summary
-    Input: None
-    Output: str — JSON overview with row counts and quality notes
-    Purpose: Orient the agent on dataset scope and known downsides.
+    Use this to orient the user on dataset scope, size, and known downsides before
+    answering deeper questions. Also use at the start of complex summarization tasks.
+    Covers: row count, category/intent counts, deduplication stats, quality notes
+    (placeholder rate, intent imbalance, synthetic origin).
     """
     meta = load_metadata()
     quality = meta.get("quality", {})
@@ -241,10 +315,118 @@ def dataset_summary() -> str:
                 "not_production_crm": True,
                 "placeholder_pct": quality.get("placeholders", {}).get("placeholder_pct"),
                 "intent_imbalance_ratio": quality.get("intent_imbalance", {}).get("ratio"),
+                "single_turn_only": True,
             },
         },
         indent=2,
     )
+
+
+class GetConversationExampleInput(BaseModel):
+    intent: str = Field(
+        ...,
+        description=(
+            "Intent to fetch conversations for, e.g. 'GET_REFUND', 'CANCEL_ORDER'. "
+            "Must be a valid intent from list_intents."
+        ),
+    )
+    limit: int = Field(
+        2,
+        ge=1,
+        le=10,
+        description="Maximum number of conversations to return (1–10). Defaults to 2.",
+    )
+
+
+@tool(args_schema=GetConversationExampleInput)
+def get_conversation_example(intent: str, limit: int = 2) -> str:
+    """
+    Return synthetic multi-turn conversations for a specific intent.
+
+    Use this when the user wants to see how a full customer-agent exchange unfolds
+    for an intent — e.g. 'How do agents typically handle refund requests step by step?'
+    Requires scripts/augment_conversations.py to have been run first; returns a notice
+    if no conversations have been generated yet.
+
+    Prefer filter_records for simple one-turn examples; use this for multi-turn flow.
+    """
+    records = load_conversations(intent=intent.strip().upper())
+    if not records:
+        return json.dumps({
+            "note": (
+                "No synthetic conversations found. "
+                "Run: python scripts/augment_conversations.py --max-intents 10"
+            ),
+            "intent": intent.strip().upper(),
+        }, indent=2)
+
+    sample = records[:max(1, min(int(limit), 10))]
+    return json.dumps(
+        {"intent": intent.strip().upper(), "count": len(records), "conversations": sample},
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+class SuggestNextQueryInput(BaseModel):
+    discussed_topics: str = Field(
+        ...,
+        description=(
+            "Comma-separated list of categories and/or intents the user has already "
+            "asked about in this session, e.g. 'REFUND, GET_REFUND, ORDER'. "
+            "Used to avoid repeating suggestions and to pick relevant follow-ups."
+        ),
+    )
+
+
+@tool(args_schema=SuggestNextQueryInput)
+def suggest_next_query(discussed_topics: str) -> str:
+    """
+    Generate 1-3 concrete follow-up query suggestions based on what the user has discussed.
+
+    Call this ONLY when the user asks 'What should I query next?', 'What can I explore?',
+    or similar recommendation requests.
+
+    IMPORTANT — after calling this tool:
+    1. Present the suggestions clearly to the user.
+    2. Ask 'Should I go ahead with [primary suggestion]?'
+    3. Do NOT call any data tools (count_rows, filter_records, etc.) yet.
+    4. Wait for explicit user confirmation ('yes', 'go ahead', 'do it') before executing.
+    5. If the user wants to refine ('I'd rather see examples'), update the suggestion
+       and ask again — still do not execute until confirmed.
+    """
+    meta = load_metadata()
+    topics = {t.strip().upper() for t in discussed_topics.split(",") if t.strip()}
+    all_categories = meta.get("categories", [])
+    all_intents = meta.get("intents", [])
+
+    suggestions: list[str] = []
+
+    # Suggest distribution of unexplored categories
+    for cat in all_categories:
+        if cat not in topics and len(suggestions) < 2:
+            suggestions.append(f"What is the distribution of intents in the {cat} category?")
+
+    # Suggest examples for a category the user mentioned
+    for topic in topics:
+        if topic in all_categories:
+            suggestions.append(f"Show me 5 examples from the {topic} category.")
+            break
+
+    # Suggest an unexplored intent count if list is short
+    for intent in all_intents:
+        if intent not in topics and len(suggestions) < 3:
+            suggestions.append(f"How many rows have the {intent} intent?")
+            break
+
+    if not suggestions:
+        suggestions = [
+            "What are the top categories by row count?",
+            "Show me 5 examples from the REFUND category.",
+            "How many rows mention 'password'?",
+        ]
+
+    return json.dumps({"suggestions": suggestions[:3]}, indent=2)
 
 
 ALL_TOOLS = [
@@ -256,4 +438,6 @@ ALL_TOOLS = [
     filter_records,
     search_instructions,
     dataset_summary,
+    get_conversation_example,
+    suggest_next_query,
 ]

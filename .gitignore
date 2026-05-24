@@ -8,7 +8,11 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/profiles/
+data/eval/last_run.json
 data/checkpoints.sqlite
+data/checkpoints.sqlite-shm
+data/checkpoints.sqlite-wal
 data/router_splits/
 *.sqlite
 .cursor/

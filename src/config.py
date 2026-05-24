@@ -36,6 +36,10 @@ DATA_PROCESSED_PATH: Path = _path("DATA_PROCESSED_PATH", "data/processed/bitext_
 DATA_AUGMENTED_PATH: Path = _path(
     "DATA_AUGMENTED_PATH", "data/processed/bitext_augmented.parquet"
 )
+DATA_FILLED_PATH: Path = _path("DATA_FILLED_PATH", "data/processed/bitext_filled.parquet")
+DATA_CONVERSATIONS_PATH: Path = _path(
+    "DATA_CONVERSATIONS_PATH", "data/processed/bitext_conversations.jsonl"
+)
 DATA_METADATA_PATH: Path = _path("DATA_METADATA_PATH", "data/processed/metadata.json")
 DATA_QUALITY_REPORT_PATH: Path = _path(
     "DATA_QUALITY_REPORT_PATH", "data/processed/quality_report.json"

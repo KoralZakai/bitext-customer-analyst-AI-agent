@@ -12,13 +12,14 @@ from src.agent.llm import router_llm
 from src.data.loader import load_metadata
 from src.data.preprocess import apply_keyword_to_category, apply_keyword_to_intent, load_aliases
 
-RouteType = Literal["structured", "unstructured", "out_of_scope"]
+RouteType = Literal["structured", "unstructured", "out_of_scope", "recommend"]
 
 ROUTER_SYSTEM = """You route questions about the Bitext customer-support TRAINING dataset.
-Return JSON only: {"route": "structured"|"unstructured"|"out_of_scope", "reason": "..."}
+Return JSON only: {"route": "structured"|"unstructured"|"out_of_scope"|"recommend", "reason": "..."}
 
-structured: counts, lists, filters, distributions, dataset stats
+structured:   counts, lists, filters, distributions, dataset stats
 unstructured: exploratory summaries, comparisons, insights needing multiple tools
+recommend:    user asks what to query next, wants suggestions, says 'what should I explore?'
 out_of_scope: unrelated to this dataset (weather, code, other companies, live CRM data)
 """
 
@@ -69,7 +70,7 @@ def classify_query(user_text: str) -> dict:
         try:
             data = json.loads(match.group())
             r = data.get("route", "structured")
-            if r in ("structured", "unstructured", "out_of_scope"):
+            if r in ("structured", "unstructured", "out_of_scope", "recommend"):
                 route = r  # type: ignore[assignment]
             reason = data.get("reason", reason)
         except json.JSONDecodeError:

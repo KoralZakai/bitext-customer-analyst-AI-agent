@@ -15,12 +15,7 @@ load_dotenv(ROOT / ".env")
 
 
 def cmd_check() -> int:
-    """
-    Name: cmd_check
-    Input: None
-    Output: int — exit code 0 if dataset loads, 1 if missing
-    Purpose: Verify preprocess artifacts without calling the LLM.
-    """
+    """Verify preprocess artifacts exist and are loadable without calling the LLM."""
     from src.config import DATA_METADATA_PATH, DATA_PROCESSED_PATH, NEBIUS_API_KEY
     from src.data.loader import dataset_ready, load_metadata, load_processed_dataframe
 
@@ -42,15 +37,15 @@ def cmd_check() -> int:
 
 def cmd_chat(session: str) -> int:
     """
-    Name: cmd_chat
-    Input: session — checkpoint thread id for conversation memory
-    Output: int — exit code (0 on normal quit)
-    Purpose: Interactive REPL loop for the LangGraph analyst agent.
+    Interactive REPL loop — prints reasoning steps (tool calls + observations)
+    before each final answer. Profile is loaded, injected, and updated each turn.
     """
     from src.config import NEBIUS_API_KEY
     from src.agent.graph import build_graph, run_turn
+    from src.agent.llm import router_llm
     from src.data.loader import dataset_ready
     from src.memory.checkpoint import get_checkpointer
+    from src.memory.profile import load_profile, profile_to_context, update_profile
 
     if not NEBIUS_API_KEY or NEBIUS_API_KEY == "your_nebius_api_key_here":
         print("Set NEBIUS_API_KEY in .env", file=sys.stderr)
@@ -59,7 +54,15 @@ def cmd_chat(session: str) -> int:
         print("Run: python -m src.data.preprocess", file=sys.stderr)
         return 1
 
-    print(f"Session: {session} | Type 'quit' to exit.\n")
+    profile_llm = router_llm()  # reuse the cheap router model for profile extraction
+
+    print(f"Session: {session} | Type 'quit' to exit.")
+    profile = load_profile(session)
+    if profile.get("name"):
+        print(f"Welcome back, {profile['name']}!\n")
+    else:
+        print()
+
     with get_checkpointer() as checkpointer:
         graph = build_graph(checkpointer=checkpointer)
         while True:
@@ -72,30 +75,37 @@ def cmd_chat(session: str) -> int:
                 continue
             if user.lower() in {"quit", "exit", "q"}:
                 break
+
+            profile_ctx = profile_to_context(load_profile(session))
+
+            reply = run_turn(
+                graph,
+                session_id=session,
+                user_text=user,
+                verbose=True,
+                profile_context=profile_ctx,
+            )
+            print(f"Agent: {reply}\n")
+
+            # Update profile in background using router LLM (cheap)
             try:
-                reply = run_turn(graph, session, user)
-                print(f"Agent: {reply}\n")
-            except Exception as e:
-                print(f"Error: {e}\n", file=sys.stderr)
+                profile = update_profile(session, user, reply, profile_llm)
+            except Exception:
+                pass  # profile update failure must never break the conversation
 
 
 def main() -> None:
-    """
-    Name: main
-    Input: None (parses --session and --check from argv)
-    Output: None (raises SystemExit with appropriate code)
-    Purpose: CLI entry for python main.py --session demo.
-    """
+    """CLI entry: python main.py [--session NAME] [--check]"""
     parser = argparse.ArgumentParser(description="Bitext data analyst agent")
     parser.add_argument(
         "--session",
         default="demo",
-        help="Conversation thread id for checkpoint memory",
+        help="Conversation thread id for checkpoint memory (default: demo)",
     )
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Only verify dataset load (no LLM chat)",
+        help="Only verify dataset artifacts (no LLM chat)",
     )
     args = parser.parse_args()
 

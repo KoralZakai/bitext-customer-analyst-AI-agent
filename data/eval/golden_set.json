@@ -1,0 +1,142 @@
+[
+  {
+    "id": "struct_01",
+    "query": "How many refund requests did we get?",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["count_rows"],
+    "expected_answer_contains": ["918"],
+    "must_not_contain": [],
+    "notes": "GET_REFUND intent has exactly 918 rows — tests alias resolution ('refund requests' → GET_REFUND)"
+  },
+  {
+    "id": "struct_02",
+    "query": "What categories exist in the dataset?",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["list_categories"],
+    "expected_answer_contains": ["REFUND", "ORDER", "ACCOUNT", "SHIPPING"],
+    "must_not_contain": [],
+    "notes": "Should enumerate all 11 categories"
+  },
+  {
+    "id": "struct_03",
+    "query": "How many CANCEL_ORDER rows are there?",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["count_rows"],
+    "expected_answer_contains": ["493"],
+    "must_not_contain": [],
+    "notes": "CANCEL_ORDER is the most underrepresented intent — exact count 493"
+  },
+  {
+    "id": "struct_04",
+    "query": "Show me 3 examples from the SHIPPING category.",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["filter_records"],
+    "expected_answer_contains": ["SHIPPING"],
+    "must_not_contain": [],
+    "notes": "Tests filter_records with category=SHIPPING and limit=3"
+  },
+  {
+    "id": "struct_05",
+    "query": "What is the distribution of intents in the ACCOUNT category?",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["distribution_by_intent"],
+    "expected_answer_contains": ["CREATE_ACCOUNT", "DELETE_ACCOUNT", "RECOVER_PASSWORD"],
+    "must_not_contain": [],
+    "notes": "ACCOUNT has 6 intents; distribution_by_intent(category='ACCOUNT') should list all"
+  },
+  {
+    "id": "struct_06",
+    "query": "How many intents does this dataset have in total?",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["list_intents", "dataset_summary"],
+    "expected_answer_contains": ["27"],
+    "must_not_contain": [],
+    "notes": "Dataset has exactly 27 intents — tests agent reading metadata"
+  },
+  {
+    "id": "alias_01",
+    "query": "Show me examples of people wanting their money back.",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["filter_records", "search_instructions"],
+    "expected_answer_contains": ["REFUND", "GET_REFUND"],
+    "must_not_contain": [],
+    "notes": "Tests alias resolution: 'money back' → GET_REFUND via intent_aliases.json"
+  },
+  {
+    "id": "alias_02",
+    "query": "How many rows mention password problems?",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["count_rows"],
+    "expected_answer_contains": [],
+    "must_not_contain": [],
+    "notes": "Tests keyword search; 'password' maps to RECOVER_PASSWORD / REGISTRATION_PROBLEMS"
+  },
+  {
+    "id": "multi_01",
+    "query": "How many complaints did we get, and how many refunds? What is the total?",
+    "type": "structured",
+    "expected_route": "structured",
+    "expected_tool_calls": ["count_rows"],
+    "expected_answer_contains": ["1000", "918"],
+    "must_not_contain": [],
+    "notes": "Multi-step: needs TWO count_rows calls (COMPLAINT=1000, GET_REFUND=918), then sum=1918"
+  },
+  {
+    "id": "unstruct_01",
+    "query": "Summarize how customer service agents typically respond to cancellation requests.",
+    "type": "unstructured",
+    "expected_route": "unstructured",
+    "expected_tool_calls": ["filter_records", "search_instructions"],
+    "expected_answer_contains": ["cancel"],
+    "must_not_contain": ["I only analyze"],
+    "notes": "Unstructured: agent must fetch examples then synthesize a summary"
+  },
+  {
+    "id": "unstruct_02",
+    "query": "Summarize the FEEDBACK category. What kinds of complaints do customers make?",
+    "type": "unstructured",
+    "expected_route": "unstructured",
+    "expected_tool_calls": ["filter_records", "distribution_by_intent", "list_intents"],
+    "expected_answer_contains": ["FEEDBACK", "COMPLAINT"],
+    "must_not_contain": ["I only analyze"],
+    "notes": "Tests unstructured summarization requiring multiple tools on a specific category"
+  },
+  {
+    "id": "oos_01",
+    "query": "Who is the president of France?",
+    "type": "out_of_scope",
+    "expected_route": "out_of_scope",
+    "expected_tool_calls": [],
+    "expected_answer_contains": [],
+    "must_not_contain": ["Macron", "Hollande", "de Gaulle"],
+    "notes": "Hard OOS: completely unrelated to dataset — agent must decline without answering from LLM knowledge"
+  },
+  {
+    "id": "oos_02",
+    "query": "What's the best CRM software for handling customer complaints?",
+    "type": "out_of_scope",
+    "expected_route": "out_of_scope",
+    "expected_tool_calls": [],
+    "expected_answer_contains": [],
+    "must_not_contain": ["Salesforce", "HubSpot", "Zendesk"],
+    "notes": "Tricky OOS: domain-adjacent question — must reject even though it mentions 'complaints'"
+  },
+  {
+    "id": "recommend_01",
+    "query": "What should I query next?",
+    "type": "recommend",
+    "expected_route": "recommend",
+    "expected_tool_calls": ["suggest_next_query"],
+    "expected_answer_contains": ["?"],
+    "must_not_contain": ["I only analyze"],
+    "notes": "Recommendation flow: agent should call suggest_next_query and present options WITHOUT executing"
+  }
+]
