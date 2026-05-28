@@ -23,18 +23,49 @@ def _resolve_filters(
     keyword: str | None = None,
 ) -> tuple[str | None, str | None, str | None]:
     aliases = load_aliases()
-    cat = category.strip().upper() if category else None
-    it = intent.strip().upper() if intent else None
-    kw = keyword.strip() if keyword else None
+
+    def _clean(v: str | None) -> str | None:
+        if not v:
+            return None
+        s = v.strip()
+        return None if s.lower() in ("null", "none", "") else s
+
+    cat_raw = _clean(category)
+    it_raw = _clean(intent)
+    kw = _clean(keyword)
+
+    cat = cat_raw.upper() if cat_raw else None
+    it = it_raw.upper() if it_raw else None
+
+    # Apply alias resolution to the intent parameter itself — handles cases where
+    # the agent passes a natural word like "complaints" instead of "COMPLAINT".
+    if it:
+        mapped = apply_keyword_to_intent(it.lower(), aliases)
+        if mapped:
+            it = mapped
+
+    alias_resolved = False
     if kw:
-        if not it:
-            mapped = apply_keyword_to_intent(kw, aliases)
-            if mapped:
+        # If keyword resolves to an alias, always clear it to avoid double-filtering.
+        # Synthetic instruction text won't contain the user's natural phrase literally,
+        # so text-searching on top of an intent/category filter always shrinks counts.
+        mapped = apply_keyword_to_intent(kw, aliases)
+        if mapped:
+            if not it:
                 it = mapped
-        if not cat:
-            mapped_cat = apply_keyword_to_category(kw, aliases)
-            if mapped_cat:
+            alias_resolved = True
+        mapped_cat = apply_keyword_to_category(kw, aliases)
+        if mapped_cat:
+            if not cat:
                 cat = mapped_cat
+            alias_resolved = True
+
+    # When the keyword resolved via alias to an intent/category, clear it so we
+    # don't also run a text-contains filter. Synthetic data won't contain the
+    # user's natural phrase (e.g. "money back") literally in instruction text.
+    if alias_resolved:
+        kw = None
+
     return cat, it, kw
 
 

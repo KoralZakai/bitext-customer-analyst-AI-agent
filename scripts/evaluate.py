@@ -21,6 +21,7 @@ Overall output:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sqlite3
 import sys
@@ -28,6 +29,10 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+# Force UTF-8 output on Windows (cp1252 can't encode Unicode symbols)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -208,9 +213,9 @@ def run_evaluation(
     if max_cases:
         cases = cases[:max_cases]
 
-    print(f"\n{BOLD}{'─' * 60}{RESET}")
-    print(f"{BOLD}  Bitext Agent — EDD Evaluation  ({len(cases)} test cases){RESET}")
-    print(f"{BOLD}{'─' * 60}{RESET}\n")
+    print(f"\n{BOLD}{'-' * 60}{RESET}")
+    print(f"{BOLD}  Bitext Agent -- EDD Evaluation  ({len(cases)} test cases){RESET}")
+    print(f"{BOLD}{'-' * 60}{RESET}\n")
 
     # Build graph with a fresh in-memory checkpoint so eval is isolated
     CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -262,7 +267,7 @@ def run_evaluation(
         print()
 
     # ── Summary ────────────────────────────────────────────────────────────
-    print(f"{BOLD}{'─' * 60}{RESET}")
+    print(f"{BOLD}{'-' * 60}{RESET}")
     print(f"{BOLD}  Results: {passed}/{len(cases)} passed{RESET}")
 
     # Per-dimension accuracy
@@ -293,9 +298,7 @@ def run_evaluation(
     else:
         print(f"\n  {GREEN}All cases passed!{RESET}")
 
-    print(f"{BOLD}{'─' * 60}{RESET}\n")
-
-    # Save results
+    print(f"{BOLD}{'-' * 60}{RESET}\n")
     if out_path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(

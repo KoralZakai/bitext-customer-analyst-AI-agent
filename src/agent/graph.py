@@ -6,8 +6,9 @@ import json
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
-from langgraph.graph import END, StateGraph
+
 from langgraph.graph.message import add_messages
+from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import create_react_agent
 from typing import Annotated, TypedDict
 
@@ -20,6 +21,16 @@ SYSTEM_PROMPT = """You are a Bitext customer-support dataset analyst.
 Use tools for factual counts and samples. The data is synthetic training data, not live CRM.
 When the user mentions refunds, shipping, etc., map to dataset category/intent fields.
 Be concise. Cite numbers from tool outputs.
+
+Grounding rules — ALWAYS follow these:
+- Base every answer on tool results, never on LLM general knowledge.
+- For summaries: open with the exact category or intent name (e.g. "The FEEDBACK category..."),
+  then describe what the tool results show — intents found, example instruction text, patterns.
+- For counts: state the exact number returned by count_rows.
+- For examples (filter_records results): open with the resolved category and intent name,
+  e.g. "Here are GET_REFUND examples from the REFUND category:" then list instructions.
+- Once you have the data you need from tools, return your answer immediately — do not call
+  additional tools to "verify" results you already have.
 
 Query recommendation flow (when route=recommend):
 - Call suggest_next_query with the topics discussed so far.
@@ -104,7 +115,11 @@ def build_graph(checkpointer=None):
 
     workflow.add_conditional_edges("route", after_route, {"agent": "agent", "end": END})
     workflow.add_edge("agent", END)
-    return workflow.compile(checkpointer=checkpointer)
+
+    # LangGraph Studio may inject checkpointer configuration as a dict.
+    # compile() expects a saver instance, bool, or None.
+    cp = None if isinstance(checkpointer, dict) else checkpointer
+    return workflow.compile(checkpointer=cp)
 
 
 def _extract_reasoning(messages: list[BaseMessage]) -> tuple[list[str], str]:

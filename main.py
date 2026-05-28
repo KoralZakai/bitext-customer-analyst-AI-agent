@@ -35,11 +35,12 @@ def cmd_check() -> int:
     return 0
 
 
-def cmd_chat(session: str) -> int:
+def cmd_chat(session: str, debug: bool = False) -> int:
     """
     Interactive REPL loop — prints reasoning steps (tool calls + observations)
     before each final answer. Profile is loaded, injected, and updated each turn.
     """
+    import time
     from src.config import NEBIUS_API_KEY
     from src.agent.graph import build_graph, run_turn
     from src.agent.llm import router_llm
@@ -57,6 +58,8 @@ def cmd_chat(session: str) -> int:
     profile_llm = router_llm()  # reuse the cheap router model for profile extraction
 
     print(f"Session: {session} | Type 'quit' to exit.")
+    if debug:
+        print("[debug mode on — response time will be shown]")
     profile = load_profile(session)
     if profile.get("name"):
         print(f"Welcome back, {profile['name']}!\n")
@@ -78,6 +81,7 @@ def cmd_chat(session: str) -> int:
 
             profile_ctx = profile_to_context(load_profile(session))
 
+            t0 = time.perf_counter()
             reply = run_turn(
                 graph,
                 session_id=session,
@@ -85,7 +89,11 @@ def cmd_chat(session: str) -> int:
                 verbose=True,
                 profile_context=profile_ctx,
             )
+            elapsed = time.perf_counter() - t0
+
             print(f"Agent: {reply}\n")
+            if debug:
+                print(f"[debug] {elapsed:.2f}s\n")
 
             # Update profile in background using router LLM (cheap)
             try:
@@ -107,13 +115,18 @@ def main() -> None:
         action="store_true",
         help="Only verify dataset artifacts (no LLM chat)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print response time after each turn",
+    )
     args = parser.parse_args()
 
     if args.check:
         raise SystemExit(cmd_check())
     if cmd_check() != 0:
         raise SystemExit(1)
-    raise SystemExit(cmd_chat(args.session))
+    raise SystemExit(cmd_chat(args.session, debug=args.debug))
 
 
 if __name__ == "__main__":

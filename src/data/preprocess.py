@@ -65,14 +65,25 @@ def apply_keyword_to_intent(keyword: str, aliases: dict[str, str]) -> str | None
     Input: keyword — user phrase; aliases — map from load_aliases()
     Output: str | None — uppercase canonical intent, or None if not an intent alias
     Purpose: Resolve natural language to intent before filtering tools run.
+             Supports both exact match and longest-substring match for full sentences.
     """
     key = keyword.strip().lower()
-    if key not in aliases:
+    # Exact match first
+    if key in aliases:
+        val = aliases[key]
+        if "_" in val or val != val.upper():
+            return val.upper()
         return None
-    val = aliases[key]
-    if "_" in val or val != val.upper():
-        return val.upper()
-    return None
+    # Longest substring match — handles full-sentence queries like
+    # "Show me examples of people wanting their money back"
+    best: str | None = None
+    best_len = 0
+    for phrase, val in aliases.items():
+        if phrase in key and len(phrase) > best_len:
+            if "_" in val or val != val.upper():
+                best = val.upper()
+                best_len = len(phrase)
+    return best
 
 
 def apply_keyword_to_category(keyword: str, aliases: dict[str, str]) -> str | None:
@@ -81,14 +92,24 @@ def apply_keyword_to_category(keyword: str, aliases: dict[str, str]) -> str | No
     Input: keyword — user phrase; aliases — map from load_aliases()
     Output: str | None — uppercase category (e.g. REFUND), or None
     Purpose: Resolve natural language to category for structured filters.
+             Supports both exact match and longest-substring match for full sentences.
     """
     key = keyword.strip().lower()
-    if key not in aliases:
+    # Exact match first
+    if key in aliases:
+        val = aliases[key]
+        if val.isupper() and "_" not in val:
+            return val
         return None
-    val = aliases[key]
-    if val.isupper() and "_" not in val:
-        return val
-    return None
+    # Longest substring match
+    best: str | None = None
+    best_len = 0
+    for phrase, val in aliases.items():
+        if phrase in key and len(phrase) > best_len:
+            if val.isupper() and "_" not in val:
+                best = val
+                best_len = len(phrase)
+    return best
 
 
 def preprocess(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
