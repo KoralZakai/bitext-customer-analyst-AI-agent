@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+import json
+
 from src.tools.analytics import (
-    count_rows,
+    count_filtered,
     dataset_summary,
     distribution_by_category,
     distribution_by_intent,
+    filter_by_category,
+    filter_by_intent,
     filter_records,
     get_conversation_example,
     list_categories,
@@ -33,13 +37,25 @@ def list_intents_tool(category: str | None = None) -> str:
 
 
 @mcp.tool
+def filter_by_intent_tool(intent: str) -> str:
+    """Select rows matching an intent; returns a preview and a result_handle."""
+    return filter_by_intent.invoke({"intent": intent})
+
+
+@mcp.tool
+def filter_by_category_tool(category: str) -> str:
+    """Select rows in a category; returns a preview and a result_handle."""
+    return filter_by_category.invoke({"category": category})
+
+
+@mcp.tool
 def count_rows_tool(
     category: str | None = None,
     intent: str | None = None,
     keyword: str | None = None,
 ) -> str:
     """Count rows with optional filters (real data only)."""
-    return count_rows.invoke({"category": category, "intent": intent, "keyword": keyword})
+    return json.dumps(count_filtered(category=category, intent=intent, keyword=keyword), indent=2)
 
 
 @mcp.tool

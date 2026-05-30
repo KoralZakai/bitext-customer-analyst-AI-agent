@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 import pandas as pd
@@ -15,6 +16,49 @@ from src.data.preprocess import apply_keyword_to_category, apply_keyword_to_inte
 
 def _real_df() -> pd.DataFrame:
     return load_real_dataframe()
+
+
+# ---------------------------------------------------------------------------
+# Filter result registry — powers the filter -> count multi-step pipeline.
+#
+# A filter tool (filter_by_intent / filter_by_category) selects rows and stores
+# the filter descriptor under an opaque handle. count_rows then counts the rows
+# for that handle. This forces genuine multi-step reasoning ("how many refunds?"
+# = filter_by_intent then count_rows) instead of a single all-in-one call, and
+# keeps counting deterministic (the handle re-applies the same filter).
+# ---------------------------------------------------------------------------
+_FILTER_REGISTRY: dict[str, dict] = {}
+
+
+def _apply_descriptor(df: pd.DataFrame, desc: dict) -> pd.DataFrame:
+    """Apply a stored filter descriptor (category / intent / keyword) to a frame."""
+    if desc.get("category"):
+        df = df[df["category"].astype(str) == desc["category"]]
+    if desc.get("intent"):
+        df = df[df["intent"].astype(str) == desc["intent"]]
+    if desc.get("keyword"):
+        kw = desc["keyword"]
+        mask = df["instruction"].str.contains(kw, case=False, na=False) | df[
+            "response"
+        ].str.contains(kw, case=False, na=False)
+        df = df[mask]
+    return df
+
+
+def count_filtered(
+    category: str | None = None,
+    intent: str | None = None,
+    keyword: str | None = None,
+) -> dict:
+    """Direct count with filters — used by the MCP wrapper and programmatic callers.
+
+    The agent-facing count_rows tool is handle-based (see below); this helper keeps
+    a simple one-shot counting API available outside the ReAct loop.
+    """
+    df = _real_df()
+    cat, it, kw = _resolve_filters(category, intent, keyword)
+    df = _apply_descriptor(df, {"category": cat, "intent": it, "keyword": kw})
+    return {"count": int(len(df)), "category": cat, "intent": it, "keyword": kw}
 
 
 def _resolve_filters(
@@ -83,26 +127,34 @@ class ListIntentsInput(BaseModel):
     )
 
 
+class FilterByIntentInput(BaseModel):
+    intent: str = Field(
+        ...,
+        description=(
+            "Intent to select rows for, e.g. 'GET_REFUND', 'CANCEL_ORDER', 'COMPLAINT'. "
+            "Natural phrases are resolved via aliases ('refund requests' → GET_REFUND, "
+            "'complaints' → COMPLAINT)."
+        ),
+    )
+
+
+class FilterByCategoryInput(BaseModel):
+    category: str = Field(
+        ...,
+        description=(
+            "Category to select rows for, e.g. 'REFUND', 'ORDER', 'SHIPPING', 'ACCOUNT'. "
+            "Natural phrases are resolved via aliases."
+        ),
+    )
+
+
 class CountRowsInput(BaseModel):
-    category: str | None = Field(
+    result_handle: str | None = Field(
         None,
         description=(
-            "Category to filter by, e.g. 'REFUND', 'ORDER', 'SHIPPING'. "
-            "Leave empty to count across all categories."
-        ),
-    )
-    intent: str | None = Field(
-        None,
-        description=(
-            "Specific intent to filter by, e.g. 'GET_REFUND', 'CANCEL_ORDER', 'TRACK_ORDER'. "
-            "Leave empty to count all intents."
-        ),
-    )
-    keyword: str | None = Field(
-        None,
-        description=(
-            "Free-text keyword to match inside instruction or response text. "
-            "Alias resolution maps natural phrases like 'money back' → GET_REFUND."
+            "The result_handle returned by a previous filter_by_intent or "
+            "filter_by_category call. Counts how many rows that filter selected. "
+            "Leave empty to count ALL rows in the whole dataset."
         ),
     )
 
@@ -135,6 +187,16 @@ class FilterRecordsInput(BaseModel):
         ge=1,
         le=20,
         description="Number of sample records to return (1–20). Defaults to 5.",
+    )
+    offset: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Number of matching rows to SKIP before sampling. Use this to page "
+            "through examples: for a 'show me more' follow-up, set offset to the "
+            "number of examples already shown (e.g. offset=3 after showing 3) so "
+            "you return DIFFERENT rows and never repeat earlier examples."
+        ),
     )
 
 
@@ -189,35 +251,135 @@ def list_intents(category: str | None = None) -> str:
     return json.dumps(meta.get("intents", []), indent=2)
 
 
-@tool(args_schema=CountRowsInput)
-def count_rows(
-    category: str | None = None,
-    intent: str | None = None,
-    keyword: str | None = None,
-) -> str:
+@tool(args_schema=FilterByIntentInput)
+def filter_by_intent(intent: str) -> str:
     """
-    Count dataset rows matching optional category, intent, or keyword filters.
+    Select the rows that match a given intent so they can be counted or inspected.
 
-    Use this to answer 'how many' questions. Alias resolution maps natural language
-    phrases to canonical values (e.g. 'refund requests' → intent=GET_REFUND).
-    Only counts real (non-synthetic) rows. Filters can be combined.
-    Example: count_rows(intent='GET_REFUND') returns the count of refund requests.
+    This is STEP 1 of answering a 'how many <intent>?' question. It resolves the
+    intent (aliases like 'refund requests' → GET_REFUND are handled), selects the
+    matching rows, and returns a small preview plus a `result_handle`.
+
+    IMPORTANT: this returns only a SAMPLE preview, NOT the total count. To get the
+    total number of matching rows, call count_rows with the returned result_handle
+    (STEP 2). Use filter_by_category instead when filtering by a whole category.
     """
     df = _real_df()
-    cat, it, kw = _resolve_filters(category, intent, keyword)
-    if cat:
-        df = df[df["category"].astype(str) == cat]
-    if it:
-        df = df[df["intent"].astype(str) == it]
-    if kw:
-        mask = df["instruction"].str.contains(kw, case=False, na=False) | df[
-            "response"
-        ].str.contains(kw, case=False, na=False)
-        df = df[mask]
+    _, it, _ = _resolve_filters(intent=intent)
+    if not it:
+        _, it, _ = _resolve_filters(keyword=intent)
+    if not it:
+        return json.dumps(
+            {
+                "error": f"Could not resolve '{intent}' to a known intent. "
+                "Call list_intents to see valid intent names.",
+            },
+            indent=2,
+        )
+    sub = df[df["intent"].astype(str) == it]
+    handle = uuid.uuid4().hex[:12]
+    _FILTER_REGISTRY[handle] = {"intent": it}
+    preview = [
+        {
+            "category": str(r["category"]),
+            "intent": str(r["intent"]),
+            "instruction": str(r["instruction"])[:200],
+        }
+        for _, r in sub.head(5).iterrows()
+    ]
     return json.dumps(
-        {"count": int(len(df)), "category": cat, "intent": it, "keyword": kw},
+        {
+            "resolved_intent": it,
+            "result_handle": handle,
+            "preview_rows": preview,
+            "note": (
+                "Preview only — this is NOT the total. To get the total number of "
+                f"matching rows, call count_rows(result_handle='{handle}')."
+            ),
+        },
         indent=2,
     )
+
+
+@tool(args_schema=FilterByCategoryInput)
+def filter_by_category(category: str) -> str:
+    """
+    Select the rows that belong to a given category so they can be counted.
+
+    This is STEP 1 of answering a 'how many rows in <category>?' question. It
+    resolves the category, selects matching rows, and returns a preview plus a
+    `result_handle`.
+
+    IMPORTANT: this returns only a SAMPLE preview, NOT the total count. To get the
+    total, call count_rows with the returned result_handle (STEP 2).
+    """
+    df = _real_df()
+    cat, _, _ = _resolve_filters(category=category)
+    if not cat:
+        cat, _, _ = _resolve_filters(keyword=category)
+    if not cat:
+        return json.dumps(
+            {
+                "error": f"Could not resolve '{category}' to a known category. "
+                "Call list_categories to see valid category names.",
+            },
+            indent=2,
+        )
+    sub = df[df["category"].astype(str) == cat]
+    handle = uuid.uuid4().hex[:12]
+    _FILTER_REGISTRY[handle] = {"category": cat}
+    preview = [
+        {
+            "category": str(r["category"]),
+            "intent": str(r["intent"]),
+            "instruction": str(r["instruction"])[:200],
+        }
+        for _, r in sub.head(5).iterrows()
+    ]
+    return json.dumps(
+        {
+            "resolved_category": cat,
+            "result_handle": handle,
+            "preview_rows": preview,
+            "note": (
+                "Preview only — this is NOT the total. To get the total number of "
+                f"matching rows, call count_rows(result_handle='{handle}')."
+            ),
+        },
+        indent=2,
+    )
+
+
+@tool(args_schema=CountRowsInput)
+def count_rows(result_handle: str | None = None) -> str:
+    """
+    Count rows. This is STEP 2 of the counting pipeline.
+
+    To count rows for a specific intent or category, FIRST call filter_by_intent or
+    filter_by_category, THEN pass the result_handle it returned to this tool. Leave
+    result_handle empty to count every row in the whole dataset.
+
+    Example flow — 'How many refund requests?':
+      1. filter_by_intent(intent='refund requests')  -> returns result_handle "abc123"
+      2. count_rows(result_handle='abc123')           -> returns {"count": 918}
+    """
+    df = _real_df()
+    if result_handle:
+        desc = _FILTER_REGISTRY.get(result_handle.strip())
+        if desc is None:
+            return json.dumps(
+                {
+                    "count": None,
+                    "error": (
+                        "Unknown result_handle. Call filter_by_intent or "
+                        "filter_by_category first, then pass the result_handle it returns."
+                    ),
+                },
+                indent=2,
+            )
+        df = _apply_descriptor(df, desc)
+        return json.dumps({"count": int(len(df)), "filter": desc}, indent=2)
+    return json.dumps({"count": int(len(df)), "filter": "all rows"}, indent=2)
 
 
 @tool
@@ -258,14 +420,21 @@ def filter_records(
     intent: str | None = None,
     keyword: str | None = None,
     limit: int = 5,
+    offset: int = 0,
 ) -> str:
     """
-    Return sample records (instruction + response) matching the given filters.
+    Return sample example records (instruction + response) matching the given filters.
 
-    Use this when the user wants to see concrete examples: 'show me 3 examples from
-    the SHIPPING category' or 'show examples of people wanting their money back'.
-    Returns the total match count plus up to `limit` sample rows.
-    Alias resolution applies — 'money back' will resolve to GET_REFUND examples.
+    Use this to SHOW the user concrete examples: 'show me 3 examples from the SHIPPING
+    category' or 'show examples of people wanting their money back'. Returns up to
+    `limit` sample rows starting at `offset`.
+
+    For a 'show me more' follow-up, set `offset` to the number of examples already
+    shown so the new examples are DIFFERENT (e.g. after showing 3, call with offset=3).
+
+    This tool is for displaying examples, not counting — to answer 'how many', use
+    filter_by_intent / filter_by_category followed by count_rows.
+    Alias resolution applies — 'money back' resolves to GET_REFUND examples.
     """
     df = _real_df()
     cat, it, kw = _resolve_filters(category, intent, keyword)
@@ -277,7 +446,8 @@ def filter_records(
         mask = df["instruction"].str.contains(kw, case=False, na=False)
         df = df[mask]
     limit = max(1, min(int(limit), 20))
-    rows = df.head(limit)
+    offset = max(0, int(offset))
+    rows = df.iloc[offset : offset + limit]
     out: list[dict[str, Any]] = []
     for _, r in rows.iterrows():
         out.append(
@@ -288,7 +458,10 @@ def filter_records(
                 "response": str(r["response"])[:300],
             }
         )
-    return json.dumps({"matches": len(df), "samples": out}, indent=2)
+    return json.dumps(
+        {"category": cat, "intent": it, "offset": offset, "returned": len(out), "samples": out},
+        indent=2,
+    )
 
 
 @tool(args_schema=SearchInstructionsInput)
@@ -463,6 +636,8 @@ def suggest_next_query(discussed_topics: str) -> str:
 ALL_TOOLS = [
     list_categories,
     list_intents,
+    filter_by_intent,
+    filter_by_category,
     count_rows,
     distribution_by_category,
     distribution_by_intent,
